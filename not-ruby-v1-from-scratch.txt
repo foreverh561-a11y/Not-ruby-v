@@ -1,0 +1,1532 @@
+--[[
+    NOT RUBY V1 - CLEAN REBUILD
+    Fresh LocalScript implementation built from scratch.
+
+    Intended location in your own Roblox experience:
+    StarterPlayer > StarterPlayerScripts > LocalScript
+
+    This build uses normal Roblox APIs only.
+]]
+
+(function()
+    local S = {
+        services = {},
+        fn = {},
+        state = {},
+        ui = {},
+        connections = {},
+        markers = {players = {}, monsters = {}},
+        original = {},
+        theme = {},
+    }
+
+    --// SERVICES
+    S.services.Players = game:GetService("Players")
+    S.services.UIS = game:GetService("UserInputService")
+    S.services.RunService = game:GetService("RunService")
+    S.services.TweenService = game:GetService("TweenService")
+    S.services.Lighting = game:GetService("Lighting")
+    S.services.Stats = game:GetService("Stats")
+    S.services.TeleportService = game:GetService("TeleportService")
+
+    S.player = S.services.Players.LocalPlayer
+    S.camera = workspace.CurrentCamera
+
+    --// STATE
+    S.state.menuOpen = true
+    S.state.dragLocked = false
+    S.state.resizeLocked = false
+    S.state.animations = true
+    S.state.blurEnabled = false
+    S.state.flyEnabled = false
+    S.state.flyUp = false
+    S.state.flyDown = false
+    S.state.noclipEnabled = false
+    S.state.sprintEnabled = false
+    S.state.playerLocator = false
+    S.state.monsterLocator = false
+    S.state.walkSpeed = 16
+    S.state.jumpPower = 50
+    S.state.sprintSpeed = 32
+    S.state.flySpeed = 60
+    S.state.brightness = 50
+    S.state.fov = 70
+    S.state.trackerRange = 1500
+    S.state.uiScale = 100
+    S.state.currentTab = "HOME"
+    S.state.destroyed = false
+    S.state.currentTheme = 1
+
+    S.theme.list = {
+        {name = "RUBY", accent = Color3.fromRGB(225, 45, 60)},
+        {name = "BLUE", accent = Color3.fromRGB(70, 145, 255)},
+        {name = "PURPLE", accent = Color3.fromRGB(155, 90, 255)},
+        {name = "EMERALD", accent = Color3.fromRGB(50, 210, 130)},
+        {name = "GOLD", accent = Color3.fromRGB(245, 185, 60)},
+    }
+    S.theme.bg = Color3.fromRGB(8, 10, 15)
+    S.theme.panel = Color3.fromRGB(14, 17, 25)
+    S.theme.surface = Color3.fromRGB(22, 26, 37)
+    S.theme.surface2 = Color3.fromRGB(29, 34, 48)
+    S.theme.text = Color3.fromRGB(242, 244, 250)
+    S.theme.muted = Color3.fromRGB(152, 160, 181)
+    S.theme.good = Color3.fromRGB(90, 230, 140)
+    S.theme.warn = Color3.fromRGB(255, 177, 76)
+    S.theme.bad = Color3.fromRGB(255, 92, 110)
+
+    S.fn.accent = function()
+        return S.theme.list[S.state.currentTheme].accent
+    end
+
+    S.fn.connect = function(signal, callback)
+        local c = signal:Connect(callback)
+        table.insert(S.connections, c)
+        return c
+    end
+
+    S.fn.tween = function(object, duration, props, style, direction)
+        if not object or not object.Parent then
+            return
+        end
+        if not S.state.animations or duration <= 0 then
+            for k, v in pairs(props) do
+                object[k] = v
+            end
+            return
+        end
+        local info = TweenInfo.new(
+            duration,
+            style or Enum.EasingStyle.Quint,
+            direction or Enum.EasingDirection.Out
+        )
+        S.services.TweenService:Create(object, info, props):Play()
+    end
+
+    S.fn.corner = function(object, radius)
+        local c = Instance.new("UICorner")
+        c.CornerRadius = UDim.new(0, radius or 10)
+        c.Parent = object
+        return c
+    end
+
+    S.fn.stroke = function(object, transparency, thickness)
+        local st = Instance.new("UIStroke")
+        st.Name = "ThemeStroke"
+        st.Color = S.fn.accent()
+        st.Transparency = transparency or 0.45
+        st.Thickness = thickness or 1
+        st.Parent = object
+        return st
+    end
+
+    S.fn.label = function(parent, text, size, height, color, bold)
+        local l = Instance.new("TextLabel")
+        l.BackgroundTransparency = 1
+        l.Size = UDim2.new(1, 0, 0, height or 22)
+        l.Text = text or ""
+        l.TextColor3 = color or S.theme.text
+        l.TextSize = size or 12
+        l.Font = bold and Enum.Font.GothamBold or Enum.Font.Gotham
+        l.TextXAlignment = Enum.TextXAlignment.Left
+        l.TextWrapped = true
+        l.Parent = parent
+        return l
+    end
+
+    S.fn.button = function(parent, text, height)
+        local b = Instance.new("TextButton")
+        b.Size = UDim2.new(1, 0, 0, height or 38)
+        b.BackgroundColor3 = S.theme.surface2
+        b.BorderSizePixel = 0
+        b.AutoButtonColor = false
+        b.Text = text or "BUTTON"
+        b.TextColor3 = S.theme.text
+        b.TextSize = 11
+        b.Font = Enum.Font.GothamBold
+        b.Parent = parent
+        S.fn.corner(b, 10)
+        S.fn.stroke(b, 0.75, 1)
+
+        local scale = Instance.new("UIScale")
+        scale.Scale = 1
+        scale.Parent = b
+
+        S.fn.connect(b.InputBegan, function(input)
+            if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                S.fn.tween(scale, 0.08, {Scale = 0.97}, Enum.EasingStyle.Quad)
+            end
+        end)
+        S.fn.connect(b.InputEnded, function(input)
+            if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                S.fn.tween(scale, 0.1, {Scale = 1}, Enum.EasingStyle.Back)
+            end
+        end)
+        return b
+    end
+
+    S.fn.section = function(parent, title, subtitle)
+        local card = Instance.new("Frame")
+        card.Size = UDim2.new(1, 0, 0, 0)
+        card.AutomaticSize = Enum.AutomaticSize.Y
+        card.BackgroundColor3 = S.theme.surface
+        card.BorderSizePixel = 0
+        card.Parent = parent
+        S.fn.corner(card, 12)
+        S.fn.stroke(card, 0.78, 1)
+
+        local pad = Instance.new("UIPadding")
+        pad.PaddingTop = UDim.new(0, 10)
+        pad.PaddingBottom = UDim.new(0, 10)
+        pad.PaddingLeft = UDim.new(0, 10)
+        pad.PaddingRight = UDim.new(0, 10)
+        pad.Parent = card
+
+        local layout = Instance.new("UIListLayout")
+        layout.Padding = UDim.new(0, 7)
+        layout.Parent = card
+
+        local t = S.fn.label(card, title or "SECTION", 12, 18, S.theme.text, true)
+        t.Name = "SectionTitle"
+        if subtitle and subtitle ~= "" then
+            S.fn.label(card, subtitle, 10, 28, S.theme.muted, false)
+        end
+        return card
+    end
+
+    S.fn.row = function(parent)
+        local r = Instance.new("Frame")
+        r.Size = UDim2.new(1, 0, 0, 38)
+        r.BackgroundTransparency = 1
+        r.Parent = parent
+        local layout = Instance.new("UIListLayout")
+        layout.FillDirection = Enum.FillDirection.Horizontal
+        layout.Padding = UDim.new(0, 7)
+        layout.VerticalAlignment = Enum.VerticalAlignment.Center
+        layout.Parent = r
+        return r
+    end
+
+    S.fn.inputBox = function(parent, placeholder, defaultText)
+        local box = Instance.new("TextBox")
+        box.Size = UDim2.new(1, 0, 0, 38)
+        box.BackgroundColor3 = S.theme.surface2
+        box.BorderSizePixel = 0
+        box.Text = tostring(defaultText or "")
+        box.PlaceholderText = placeholder or ""
+        box.ClearTextOnFocus = false
+        box.TextColor3 = S.theme.text
+        box.PlaceholderColor3 = S.theme.muted
+        box.TextSize = 11
+        box.Font = Enum.Font.GothamBold
+        box.Parent = parent
+        S.fn.corner(box, 10)
+        S.fn.stroke(box, 0.82, 1)
+        return box
+    end
+
+    S.fn.setButtonState = function(button, label, enabled)
+        if not button then return end
+        button.Text = label .. (enabled and " [ON]" or " [OFF]")
+        button.TextColor3 = enabled and S.fn.accent() or S.theme.text
+    end
+
+    S.fn.status = function(text, mode)
+        if not S.ui.status then return end
+        S.ui.status.Text = tostring(text or "READY")
+        if mode == "bad" then
+            S.ui.status.TextColor3 = S.theme.bad
+        elseif mode == "warn" then
+            S.ui.status.TextColor3 = S.theme.warn
+        elseif mode == "good" then
+            S.ui.status.TextColor3 = S.theme.good
+        else
+            S.ui.status.TextColor3 = S.fn.accent()
+        end
+        S.ui.status.TextTransparency = 0.4
+        S.fn.tween(S.ui.status, 0.18, {TextTransparency = 0})
+    end
+
+    S.fn.getCharacter = function()
+        local ch = S.player.Character
+        if not ch then return nil, nil, nil end
+        return ch, ch:FindFirstChildOfClass("Humanoid"), ch:FindFirstChild("HumanoidRootPart")
+    end
+
+    S.fn.applyMovement = function()
+        local _, hum = S.fn.getCharacter()
+        if not hum then return end
+        hum.WalkSpeed = S.state.sprintEnabled and S.state.sprintSpeed or S.state.walkSpeed
+        if hum.UseJumpPower then
+            hum.JumpPower = S.state.jumpPower
+        end
+    end
+
+    S.fn.applyBrightness = function()
+        local v = math.clamp(S.state.brightness, 0, 100)
+        if v == 50 then
+            S.services.Lighting.Brightness = S.original.brightness
+            S.services.Lighting.ExposureCompensation = S.original.exposure
+            return
+        end
+
+        if v < 50 then
+            local a = v / 50
+            S.services.Lighting.Brightness = S.original.brightness * a
+            S.services.Lighting.ExposureCompensation = S.original.exposure - (1.7 * (1 - a))
+        else
+            local a = (v - 50) / 50
+            S.services.Lighting.Brightness = S.original.brightness + (3.5 * a)
+            S.services.Lighting.ExposureCompensation = S.original.exposure + (1.6 * a)
+        end
+    end
+
+    S.fn.updateTheme = function()
+        local accent = S.fn.accent()
+        if S.ui.headerLine then S.ui.headerLine.BackgroundColor3 = accent end
+        if S.ui.status then S.ui.status.TextColor3 = accent end
+        if S.ui.openButton then
+            local st = S.ui.openButton:FindFirstChild("ThemeStroke")
+            if st then st.Color = accent end
+        end
+        if S.ui.sidebar then S.ui.sidebar.ScrollBarImageColor3 = accent end
+        for _, page in pairs(S.ui.pages or {}) do
+            page.ScrollBarImageColor3 = accent
+        end
+        if S.ui.gui then
+            for _, d in ipairs(S.ui.gui:GetDescendants()) do
+                if d:IsA("UIStroke") and d.Name == "ThemeStroke" then
+                    d.Color = accent
+                end
+                if d:IsA("Frame") and d.Name == "SelectedIndicator" then
+                    d.BackgroundColor3 = accent
+                end
+            end
+        end
+        if S.ui.tabButtons then
+            for name, button in pairs(S.ui.tabButtons) do
+                local selected = name == S.state.currentTab
+                button.TextColor3 = selected and accent or S.theme.text
+                local indicator = button:FindFirstChild("SelectedIndicator")
+                if indicator then
+                    indicator.BackgroundColor3 = accent
+                    indicator.BackgroundTransparency = selected and 0 or 1
+                end
+            end
+        end
+    end
+
+    S.fn.makeSlider = function(parent, title, minValue, maxValue, startValue, onChanged)
+        local wrap = Instance.new("Frame")
+        wrap.Size = UDim2.new(1, 0, 0, 58)
+        wrap.BackgroundTransparency = 1
+        wrap.Parent = parent
+
+        local titleLabel = Instance.new("TextLabel")
+        titleLabel.BackgroundTransparency = 1
+        titleLabel.Size = UDim2.new(1, -60, 0, 20)
+        titleLabel.Text = title
+        titleLabel.TextColor3 = S.theme.text
+        titleLabel.TextSize = 10
+        titleLabel.Font = Enum.Font.GothamBold
+        titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+        titleLabel.Parent = wrap
+
+        local valueLabel = Instance.new("TextLabel")
+        valueLabel.BackgroundTransparency = 1
+        valueLabel.AnchorPoint = Vector2.new(1, 0)
+        valueLabel.Position = UDim2.new(1, 0, 0, 0)
+        valueLabel.Size = UDim2.fromOffset(55, 20)
+        valueLabel.Text = tostring(startValue)
+        valueLabel.TextColor3 = S.fn.accent()
+        valueLabel.TextSize = 10
+        valueLabel.Font = Enum.Font.GothamBold
+        valueLabel.TextXAlignment = Enum.TextXAlignment.Right
+        valueLabel.Parent = wrap
+
+        local bar = Instance.new("Frame")
+        bar.Position = UDim2.new(0, 0, 0, 30)
+        bar.Size = UDim2.new(1, 0, 0, 8)
+        bar.BackgroundColor3 = S.theme.surface2
+        bar.BorderSizePixel = 0
+        bar.Active = true
+        bar.Parent = wrap
+        S.fn.corner(bar, 999)
+
+        local fill = Instance.new("Frame")
+        fill.Size = UDim2.new((startValue - minValue) / (maxValue - minValue), 0, 1, 0)
+        fill.BackgroundColor3 = S.fn.accent()
+        fill.BorderSizePixel = 0
+        fill.Parent = bar
+        S.fn.corner(fill, 999)
+
+        local knob = Instance.new("Frame")
+        knob.AnchorPoint = Vector2.new(0.5, 0.5)
+        knob.Position = UDim2.new(fill.Size.X.Scale, 0, 0.5, 0)
+        knob.Size = UDim2.fromOffset(18, 18)
+        knob.BackgroundColor3 = S.theme.text
+        knob.BorderSizePixel = 0
+        knob.Parent = bar
+        S.fn.corner(knob, 999)
+        S.fn.stroke(knob, 0.15, 2)
+
+        local dragging = false
+        local function setFromX(x)
+            local absoluteX = bar.AbsolutePosition.X
+            local width = math.max(bar.AbsoluteSize.X, 1)
+            local alpha = math.clamp((x - absoluteX) / width, 0, 1)
+            local value = math.floor((minValue + ((maxValue - minValue) * alpha)) + 0.5)
+            local exactAlpha = (value - minValue) / (maxValue - minValue)
+            fill.Size = UDim2.new(exactAlpha, 0, 1, 0)
+            knob.Position = UDim2.new(exactAlpha, 0, 0.5, 0)
+            valueLabel.Text = tostring(value)
+            fill.BackgroundColor3 = S.fn.accent()
+            local st = knob:FindFirstChild("ThemeStroke")
+            if st then st.Color = S.fn.accent() end
+            onChanged(value)
+        end
+
+        S.fn.connect(bar.InputBegan, function(input)
+            if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                dragging = true
+                setFromX(input.Position.X)
+            end
+        end)
+
+        S.fn.connect(S.services.UIS.InputChanged, function(input)
+            if dragging and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
+                setFromX(input.Position.X)
+            end
+        end)
+
+        S.fn.connect(S.services.UIS.InputEnded, function(input)
+            if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                dragging = false
+            end
+        end)
+
+        return wrap
+    end
+
+    S.fn.makePage = function(name)
+        local page = Instance.new("ScrollingFrame")
+        page.Name = name .. "Page"
+        page.Size = UDim2.fromScale(1, 1)
+        page.BackgroundTransparency = 1
+        page.BorderSizePixel = 0
+        page.ScrollBarThickness = 3
+        page.ScrollBarImageColor3 = S.fn.accent()
+        page.AutomaticCanvasSize = Enum.AutomaticSize.Y
+        page.CanvasSize = UDim2.new()
+        page.Visible = false
+        page.Parent = S.ui.content
+
+        local pad = Instance.new("UIPadding")
+        pad.PaddingTop = UDim.new(0, 10)
+        pad.PaddingBottom = UDim.new(0, 12)
+        pad.PaddingLeft = UDim.new(0, 10)
+        pad.PaddingRight = UDim.new(0, 10)
+        pad.Parent = page
+
+        local layout = Instance.new("UIListLayout")
+        layout.Padding = UDim.new(0, 8)
+        layout.Parent = page
+        S.ui.pages[name] = page
+        return page
+    end
+
+    S.fn.selectTab = function(name)
+        if not S.ui.pages[name] then return end
+        S.state.currentTab = name
+        for pageName, page in pairs(S.ui.pages) do
+            page.Visible = pageName == name
+        end
+        for tabName, button in pairs(S.ui.tabButtons) do
+            local selected = tabName == name
+            button.BackgroundColor3 = selected and S.theme.surface2 or S.theme.surface
+            button.TextColor3 = selected and S.fn.accent() or S.theme.text
+            local indicator = button:FindFirstChild("SelectedIndicator")
+            if indicator then
+                indicator.BackgroundColor3 = S.fn.accent()
+                indicator.BackgroundTransparency = selected and 0 or 1
+                indicator.Size = UDim2.fromOffset(3, selected and 22 or 0)
+            end
+        end
+        S.fn.status(name)
+    end
+
+    S.fn.makeTab = function(name, text)
+        local b = Instance.new("TextButton")
+        b.Name = name .. "Tab"
+        b.Size = UDim2.new(1, 0, 0, 40)
+        b.BackgroundColor3 = S.theme.surface
+        b.BorderSizePixel = 0
+        b.AutoButtonColor = false
+        b.Text = text
+        b.TextColor3 = S.theme.text
+        b.TextSize = 10
+        b.Font = Enum.Font.GothamBold
+        b.Parent = S.ui.sidebar
+        S.fn.corner(b, 9)
+
+        local indicator = Instance.new("Frame")
+        indicator.Name = "SelectedIndicator"
+        indicator.AnchorPoint = Vector2.new(0, 0.5)
+        indicator.Position = UDim2.new(0, 4, 0.5, 0)
+        indicator.Size = UDim2.fromOffset(3, 0)
+        indicator.BackgroundColor3 = S.fn.accent()
+        indicator.BackgroundTransparency = 1
+        indicator.BorderSizePixel = 0
+        indicator.Parent = b
+        S.fn.corner(indicator, 999)
+
+        S.ui.tabButtons[name] = b
+        S.fn.connect(b.Activated, function()
+            S.fn.selectTab(name)
+        end)
+        return b
+    end
+
+    S.fn.fitPanel = function()
+        if not S.camera or not S.ui.panel then return end
+        local vp = S.camera.ViewportSize
+        local width = math.clamp(math.floor(vp.X * 0.88), 360, 720)
+        local height = math.clamp(math.floor(vp.Y * 0.76), 310, 560)
+        S.ui.panel.Size = UDim2.fromOffset(width, height)
+        S.ui.panel.Position = UDim2.new(0.5, -math.floor(width / 2), 0.5, -math.floor(height / 2))
+    end
+
+    S.fn.setMenuOpen = function(open)
+        if S.state.destroyed then return end
+        S.state.menuOpen = open
+        S.ui.openButton.Visible = not open
+
+        if open then
+            S.ui.panel.Visible = true
+            S.ui.panelScale.Scale = 0.86
+            S.ui.panel.BackgroundTransparency = 0.2
+            S.fn.tween(S.ui.panelScale, 0.22, {Scale = 1}, Enum.EasingStyle.Back)
+            S.fn.tween(S.ui.panel, 0.18, {BackgroundTransparency = 0})
+        else
+            if not S.state.animations then
+                S.ui.panel.Visible = false
+                return
+            end
+            S.fn.tween(S.ui.panelScale, 0.16, {Scale = 0.88}, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+            S.fn.tween(S.ui.panel, 0.16, {BackgroundTransparency = 0.25}, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+            task.delay(0.17, function()
+                if S.ui.panel and S.ui.panel.Parent and not S.state.menuOpen then
+                    S.ui.panel.Visible = false
+                end
+            end)
+        end
+    end
+
+    S.fn.makeMarker = function(rootPart, title, color)
+        local gui = Instance.new("BillboardGui")
+        gui.Size = UDim2.fromOffset(190, 44)
+        gui.StudsOffset = Vector3.new(0, 3.2, 0)
+        gui.AlwaysOnTop = true
+        gui.MaxDistance = S.state.trackerRange
+        gui.Adornee = rootPart
+        gui.Parent = rootPart
+
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.fromScale(1, 1)
+        label.BackgroundTransparency = 1
+        label.Text = title
+        label.TextColor3 = color
+        label.TextStrokeTransparency = 0.35
+        label.TextSize = 13
+        label.Font = Enum.Font.GothamBold
+        label.TextWrapped = true
+        label.Parent = gui
+        return gui, label
+    end
+
+    S.fn.clearPlayerMarkers = function()
+        for target, data in pairs(S.markers.players) do
+            if data.gui then data.gui:Destroy() end
+            S.markers.players[target] = nil
+        end
+    end
+
+    S.fn.clearMonsterMarkers = function()
+        for target, data in pairs(S.markers.monsters) do
+            if data.gui then data.gui:Destroy() end
+            S.markers.monsters[target] = nil
+        end
+    end
+
+    S.fn.refreshPlayerMarkers = function()
+        if not S.state.playerLocator then
+            S.fn.clearPlayerMarkers()
+            return
+        end
+
+        local _, _, myRoot = S.fn.getCharacter()
+        for _, p in ipairs(S.services.Players:GetPlayers()) do
+            if p ~= S.player then
+                local ch = p.Character
+                local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+                local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+                if hrp and hum and hum.Health > 0 then
+                    if not S.markers.players[p] or not S.markers.players[p].gui.Parent then
+                        local gui, label = S.fn.makeMarker(hrp, "", Color3.fromRGB(100, 190, 255))
+                        S.markers.players[p] = {gui = gui, label = label}
+                    end
+                    local distance = myRoot and math.floor((myRoot.Position - hrp.Position).Magnitude) or 0
+                    S.markers.players[p].gui.MaxDistance = S.state.trackerRange
+                    S.markers.players[p].label.Text = p.DisplayName .. " (@" .. p.Name .. ")\n" .. tostring(distance) .. " studs"
+                else
+                    local old = S.markers.players[p]
+                    if old and old.gui then old.gui:Destroy() end
+                    S.markers.players[p] = nil
+                end
+            end
+        end
+
+        for p, data in pairs(S.markers.players) do
+            if not p.Parent then
+                if data.gui then data.gui:Destroy() end
+                S.markers.players[p] = nil
+            end
+        end
+    end
+
+    S.fn.isMonster = function(model)
+        if not model:IsA("Model") then return false end
+        local hum = model:FindFirstChildOfClass("Humanoid")
+        local root = model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("UpperTorso") or model:FindFirstChild("Torso")
+        if not hum or not root or hum.Health <= 0 then return false end
+        for _, p in ipairs(S.services.Players:GetPlayers()) do
+            if p.Character == model then return false end
+        end
+        return true
+    end
+
+    S.fn.refreshMonsterMarkers = function()
+        if not S.state.monsterLocator then
+            S.fn.clearMonsterMarkers()
+            return
+        end
+
+        local _, _, myRoot = S.fn.getCharacter()
+        local seen = {}
+        for _, obj in ipairs(workspace:GetChildren()) do
+            if S.fn.isMonster(obj) then
+                seen[obj] = true
+                local root = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("UpperTorso") or obj:FindFirstChild("Torso")
+                local distance = myRoot and math.floor((myRoot.Position - root.Position).Magnitude) or 0
+                if distance <= S.state.trackerRange then
+                    if not S.markers.monsters[obj] or not S.markers.monsters[obj].gui.Parent then
+                        local gui, label = S.fn.makeMarker(root, "", Color3.fromRGB(255, 190, 70))
+                        S.markers.monsters[obj] = {gui = gui, label = label}
+                    end
+                    S.markers.monsters[obj].gui.MaxDistance = S.state.trackerRange
+                    S.markers.monsters[obj].label.Text = obj.Name .. "\n" .. tostring(distance) .. " studs"
+                else
+                    local old = S.markers.monsters[obj]
+                    if old and old.gui then old.gui:Destroy() end
+                    S.markers.monsters[obj] = nil
+                end
+            end
+        end
+
+        for model, data in pairs(S.markers.monsters) do
+            if not seen[model] or not model.Parent then
+                if data.gui then data.gui:Destroy() end
+                S.markers.monsters[model] = nil
+            end
+        end
+    end
+
+    S.fn.enableNoclip = function(enabled)
+        S.state.noclipEnabled = enabled
+        if not enabled then
+            local ch = S.player.Character
+            if ch then
+                for _, part in ipairs(ch:GetDescendants()) do
+                    if part:IsA("BasePart") and S.original.collisions[part] ~= nil then
+                        part.CanCollide = S.original.collisions[part]
+                    end
+                end
+            end
+            S.original.collisions = {}
+        end
+    end
+
+    S.fn.destroy = function()
+        if S.state.destroyed then return end
+        S.state.destroyed = true
+        S.state.flyEnabled = false
+        S.state.noclipEnabled = false
+        S.fn.clearPlayerMarkers()
+        S.fn.clearMonsterMarkers()
+        S.fn.enableNoclip(false)
+
+        pcall(function()
+            S.services.Lighting.Brightness = S.original.brightness
+            S.services.Lighting.ExposureCompensation = S.original.exposure
+            S.services.Lighting.ClockTime = S.original.clockTime
+            S.services.Lighting.Ambient = S.original.ambient
+            S.services.Lighting.OutdoorAmbient = S.original.outdoorAmbient
+            if S.camera then S.camera.FieldOfView = S.original.fov end
+        end)
+
+        if S.ui.blur then S.ui.blur:Destroy() end
+        for _, c in ipairs(S.connections) do
+            pcall(function() c:Disconnect() end)
+        end
+        if S.ui.gui then S.ui.gui:Destroy() end
+    end
+
+    --// ORIGINAL VALUES
+    S.original.brightness = S.services.Lighting.Brightness
+    S.original.exposure = S.services.Lighting.ExposureCompensation
+    S.original.clockTime = S.services.Lighting.ClockTime
+    S.original.ambient = S.services.Lighting.Ambient
+    S.original.outdoorAmbient = S.services.Lighting.OutdoorAmbient
+    S.original.fov = S.camera and S.camera.FieldOfView or 70
+    S.original.collisions = {}
+
+    --// CLEAN OLD COPY
+    do
+        local pg = S.player:WaitForChild("PlayerGui")
+        local old = pg:FindFirstChild("NotRubyV1Clean")
+        if old then old:Destroy() end
+    end
+
+    --// ROOT GUI
+    S.ui.gui = Instance.new("ScreenGui")
+    S.ui.gui.Name = "NotRubyV1Clean"
+    S.ui.gui.ResetOnSpawn = false
+    S.ui.gui.IgnoreGuiInset = true
+    S.ui.gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    S.ui.gui.DisplayOrder = 999
+    S.ui.gui.Parent = S.player:WaitForChild("PlayerGui")
+
+    -- background blur
+    S.ui.blur = Instance.new("BlurEffect")
+    S.ui.blur.Name = "NotRubyV1Blur"
+    S.ui.blur.Size = 0
+    S.ui.blur.Parent = S.services.Lighting
+
+    -- panel
+    S.ui.panel = Instance.new("Frame")
+    S.ui.panel.Name = "MainPanel"
+    S.ui.panel.Size = UDim2.fromOffset(580, 440)
+    S.ui.panel.Position = UDim2.new(0.5, -290, 0.5, -220)
+    S.ui.panel.BackgroundColor3 = S.theme.bg
+    S.ui.panel.BorderSizePixel = 0
+    S.ui.panel.Active = true
+    S.ui.panel.Parent = S.ui.gui
+    S.fn.corner(S.ui.panel, 18)
+    S.fn.stroke(S.ui.panel, 0.12, 1.5)
+
+    S.ui.panelScale = Instance.new("UIScale")
+    S.ui.panelScale.Scale = 1
+    S.ui.panelScale.Parent = S.ui.panel
+
+    local panelGradient = Instance.new("UIGradient")
+    panelGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, S.theme.bg),
+        ColorSequenceKeypoint.new(0.55, S.theme.panel),
+        ColorSequenceKeypoint.new(1, S.theme.bg),
+    })
+    panelGradient.Rotation = 120
+    panelGradient.Parent = S.ui.panel
+
+    -- header
+    S.ui.header = Instance.new("Frame")
+    S.ui.header.Name = "Header"
+    S.ui.header.Size = UDim2.new(1, 0, 0, 54)
+    S.ui.header.BackgroundColor3 = S.theme.panel
+    S.ui.header.BorderSizePixel = 0
+    S.ui.header.Active = true
+    S.ui.header.Parent = S.ui.panel
+    S.fn.corner(S.ui.header, 18)
+
+    local headerMask = Instance.new("Frame")
+    headerMask.Size = UDim2.new(1, 0, 0, 18)
+    headerMask.Position = UDim2.new(0, 0, 1, -18)
+    headerMask.BackgroundColor3 = S.theme.panel
+    headerMask.BorderSizePixel = 0
+    headerMask.Parent = S.ui.header
+
+    S.ui.logo = Instance.new("ImageLabel")
+    S.ui.logo.Size = UDim2.fromOffset(36, 36)
+    S.ui.logo.Position = UDim2.fromOffset(12, 9)
+    S.ui.logo.BackgroundColor3 = S.theme.surface2
+    S.ui.logo.BorderSizePixel = 0
+    S.ui.logo.ScaleType = Enum.ScaleType.Crop
+    S.ui.logo.Image = "rbxassetid://86403667112549"
+    S.ui.logo.Parent = S.ui.header
+    S.fn.corner(S.ui.logo, 999)
+    S.fn.stroke(S.ui.logo, 0.1, 1.4)
+
+    S.ui.title = Instance.new("TextLabel")
+    S.ui.title.BackgroundTransparency = 1
+    S.ui.title.Position = UDim2.fromOffset(57, 8)
+    S.ui.title.Size = UDim2.new(1, -150, 0, 20)
+    S.ui.title.Text = "NOT RUBY V1"
+    S.ui.title.TextColor3 = S.theme.text
+    S.ui.title.TextSize = 14
+    S.ui.title.Font = Enum.Font.GothamBlack
+    S.ui.title.TextXAlignment = Enum.TextXAlignment.Left
+    S.ui.title.Parent = S.ui.header
+
+    S.ui.status = Instance.new("TextLabel")
+    S.ui.status.BackgroundTransparency = 1
+    S.ui.status.Position = UDim2.fromOffset(58, 29)
+    S.ui.status.Size = UDim2.new(1, -150, 0, 15)
+    S.ui.status.Text = "READY"
+    S.ui.status.TextColor3 = S.fn.accent()
+    S.ui.status.TextSize = 9
+    S.ui.status.Font = Enum.Font.GothamBold
+    S.ui.status.TextXAlignment = Enum.TextXAlignment.Left
+    S.ui.status.Parent = S.ui.header
+
+    S.ui.headerLine = Instance.new("Frame")
+    S.ui.headerLine.AnchorPoint = Vector2.new(0.5, 1)
+    S.ui.headerLine.Position = UDim2.new(0.5, 0, 1, 0)
+    S.ui.headerLine.Size = UDim2.new(1, -24, 0, 2)
+    S.ui.headerLine.BackgroundColor3 = S.fn.accent()
+    S.ui.headerLine.BorderSizePixel = 0
+    S.ui.headerLine.Parent = S.ui.header
+    S.fn.corner(S.ui.headerLine, 999)
+
+    S.ui.minimize = Instance.new("TextButton")
+    S.ui.minimize.Size = UDim2.fromOffset(34, 34)
+    S.ui.minimize.Position = UDim2.new(1, -82, 0, 10)
+    S.ui.minimize.BackgroundColor3 = S.theme.surface2
+    S.ui.minimize.BorderSizePixel = 0
+    S.ui.minimize.Text = "—"
+    S.ui.minimize.TextColor3 = S.theme.text
+    S.ui.minimize.TextSize = 15
+    S.ui.minimize.Font = Enum.Font.GothamBlack
+    S.ui.minimize.Parent = S.ui.header
+    S.fn.corner(S.ui.minimize, 10)
+
+    S.ui.close = Instance.new("TextButton")
+    S.ui.close.Size = UDim2.fromOffset(34, 34)
+    S.ui.close.Position = UDim2.new(1, -42, 0, 10)
+    S.ui.close.BackgroundColor3 = Color3.fromRGB(75, 31, 44)
+    S.ui.close.BorderSizePixel = 0
+    S.ui.close.Text = "X"
+    S.ui.close.TextColor3 = S.theme.text
+    S.ui.close.TextSize = 13
+    S.ui.close.Font = Enum.Font.GothamBlack
+    S.ui.close.Parent = S.ui.header
+    S.fn.corner(S.ui.close, 10)
+
+    -- sidebar
+    S.ui.sidebar = Instance.new("ScrollingFrame")
+    S.ui.sidebar.Name = "Sidebar"
+    S.ui.sidebar.Position = UDim2.fromOffset(8, 62)
+    S.ui.sidebar.Size = UDim2.new(0, 128, 1, -70)
+    S.ui.sidebar.BackgroundColor3 = S.theme.panel
+    S.ui.sidebar.BorderSizePixel = 0
+    S.ui.sidebar.ScrollBarThickness = 2
+    S.ui.sidebar.ScrollBarImageColor3 = S.fn.accent()
+    S.ui.sidebar.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    S.ui.sidebar.CanvasSize = UDim2.new()
+    S.ui.sidebar.Parent = S.ui.panel
+    S.fn.corner(S.ui.sidebar, 13)
+
+    local sidebarPad = Instance.new("UIPadding")
+    sidebarPad.PaddingTop = UDim.new(0, 8)
+    sidebarPad.PaddingBottom = UDim.new(0, 8)
+    sidebarPad.PaddingLeft = UDim.new(0, 7)
+    sidebarPad.PaddingRight = UDim.new(0, 7)
+    sidebarPad.Parent = S.ui.sidebar
+
+    local sidebarLayout = Instance.new("UIListLayout")
+    sidebarLayout.Padding = UDim.new(0, 6)
+    sidebarLayout.Parent = S.ui.sidebar
+
+    -- content
+    S.ui.content = Instance.new("Frame")
+    S.ui.content.Name = "Content"
+    S.ui.content.Position = UDim2.fromOffset(143, 62)
+    S.ui.content.Size = UDim2.new(1, -151, 1, -70)
+    S.ui.content.BackgroundColor3 = S.theme.panel
+    S.ui.content.BorderSizePixel = 0
+    S.ui.content.ClipsDescendants = true
+    S.ui.content.Parent = S.ui.panel
+    S.fn.corner(S.ui.content, 13)
+
+    S.ui.pages = {}
+    S.ui.tabButtons = {}
+
+    S.fn.makeTab("HOME", "HOME")
+    S.fn.makeTab("MOVEMENT", "MOVEMENT")
+    S.fn.makeTab("VISUALS", "VISUALS")
+    S.fn.makeTab("TRACKERS", "TRACKERS")
+    S.fn.makeTab("SETTINGS", "SETTINGS")
+
+    local homePage = S.fn.makePage("HOME")
+    local movementPage = S.fn.makePage("MOVEMENT")
+    local visualsPage = S.fn.makePage("VISUALS")
+    local trackersPage = S.fn.makePage("TRACKERS")
+    local settingsPage = S.fn.makePage("SETTINGS")
+
+    --// HOME
+    do
+        local profile = S.fn.section(homePage, "WELCOME", "Fresh rebuild. Lightweight, touch-friendly, and easier to maintain.")
+
+        local infoRow = S.fn.row(profile)
+        local avatar = Instance.new("ImageLabel")
+        avatar.Size = UDim2.fromOffset(48, 48)
+        avatar.BackgroundColor3 = S.theme.surface2
+        avatar.BorderSizePixel = 0
+        avatar.Parent = infoRow
+        S.fn.corner(avatar, 999)
+        S.fn.stroke(avatar, 0.25, 1.3)
+
+        local info = Instance.new("TextLabel")
+        info.Size = UDim2.new(1, -55, 1, 0)
+        info.BackgroundTransparency = 1
+        info.TextColor3 = S.theme.text
+        info.TextSize = 11
+        info.Font = Enum.Font.GothamBold
+        info.TextXAlignment = Enum.TextXAlignment.Left
+        info.TextYAlignment = Enum.TextYAlignment.Center
+        info.TextWrapped = true
+        info.Text = S.player.DisplayName .. "\n@" .. S.player.Name
+        info.Parent = infoRow
+
+        task.spawn(function()
+            local ok, image = pcall(function()
+                return S.services.Players:GetUserThumbnailAsync(
+                    S.player.UserId,
+                    Enum.ThumbnailType.HeadShot,
+                    Enum.ThumbnailSize.Size150x150
+                )
+            end)
+            if ok and avatar.Parent then avatar.Image = image end
+        end)
+
+        local snapshot = S.fn.section(homePage, "SERVER SNAPSHOT", "Live local session information.")
+        local snapshotLabel = S.fn.label(snapshot, "Loading...", 11, 62, S.theme.muted, true)
+        snapshotLabel.Name = "SnapshotLabel"
+
+        local actionRow = S.fn.row(snapshot)
+        local fitBtn = S.fn.button(actionRow, "FIT TO SCREEN", 38)
+        fitBtn.Size = UDim2.new(0.5, -4, 1, 0)
+        local rejoinBtn = S.fn.button(actionRow, "REJOIN", 38)
+        rejoinBtn.Size = UDim2.new(0.5, -4, 1, 0)
+
+        S.fn.connect(fitBtn.Activated, function()
+            S.fn.fitPanel()
+            S.fn.status("FIT TO SCREEN", "good")
+        end)
+
+        S.fn.connect(rejoinBtn.Activated, function()
+            S.fn.status("REJOINING...", "warn")
+            local ok = pcall(function()
+                if game.JobId ~= "" then
+                    S.services.TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, S.player)
+                else
+                    S.services.TeleportService:Teleport(game.PlaceId, S.player)
+                end
+            end)
+            if not ok then S.fn.status("REJOIN FAILED", "bad") end
+        end)
+
+        task.spawn(function()
+            local started = os.clock()
+            while not S.state.destroyed do
+                task.wait(1)
+                if snapshotLabel.Parent then
+                    local ping = "--"
+                    pcall(function()
+                        ping = tostring(math.floor(S.services.Stats.Network.ServerStatsItem["Data Ping"]:GetValue())) .. " ms"
+                    end)
+                    local elapsed = math.floor(os.clock() - started)
+                    local mins = math.floor(elapsed / 60)
+                    local secs = elapsed % 60
+                    snapshotLabel.Text = string.format(
+                        "PLAYERS: %d   |   PING: %s\nSESSION: %02d:%02d   |   PLACE: %s",
+                        #S.services.Players:GetPlayers(),
+                        ping,
+                        mins,
+                        secs,
+                        tostring(game.PlaceId)
+                    )
+                end
+            end
+        end)
+    end
+
+    --// MOVEMENT
+    do
+        local movement = S.fn.section(movementPage, "MOVEMENT", "Standard local movement controls for your own experience.")
+
+        S.fn.makeSlider(movement, "WALK SPEED", 0, 100, S.state.walkSpeed, function(v)
+            S.state.walkSpeed = v
+            S.fn.applyMovement()
+        end)
+        S.fn.makeSlider(movement, "JUMP POWER", 0, 150, S.state.jumpPower, function(v)
+            S.state.jumpPower = v
+            S.fn.applyMovement()
+        end)
+        S.fn.makeSlider(movement, "SPRINT SPEED", 0, 150, S.state.sprintSpeed, function(v)
+            S.state.sprintSpeed = v
+            S.fn.applyMovement()
+        end)
+        S.fn.makeSlider(movement, "FLY SPEED", 10, 180, S.state.flySpeed, function(v)
+            S.state.flySpeed = v
+        end)
+
+        local sprintBtn = S.fn.button(movement, "SPRINT [OFF]")
+        local flyBtn = S.fn.button(movement, "FLIGHT [OFF]")
+        local noclipBtn = S.fn.button(movement, "NOCLIP [OFF]")
+
+        local verticalRow = S.fn.row(movement)
+        local upBtn = S.fn.button(verticalRow, "FLY UP", 38)
+        upBtn.Size = UDim2.new(0.5, -4, 1, 0)
+        local downBtn = S.fn.button(verticalRow, "FLY DOWN", 38)
+        downBtn.Size = UDim2.new(0.5, -4, 1, 0)
+
+        local resetBtn = S.fn.button(movement, "RESET MOVEMENT")
+
+        S.fn.connect(sprintBtn.Activated, function()
+            S.state.sprintEnabled = not S.state.sprintEnabled
+            S.fn.setButtonState(sprintBtn, "SPRINT", S.state.sprintEnabled)
+            S.fn.applyMovement()
+            S.fn.status(S.state.sprintEnabled and "SPRINT ON" or "SPRINT OFF")
+        end)
+
+        S.fn.connect(flyBtn.Activated, function()
+            S.state.flyEnabled = not S.state.flyEnabled
+            S.fn.setButtonState(flyBtn, "FLIGHT", S.state.flyEnabled)
+            local _, hum = S.fn.getCharacter()
+            if hum then hum.AutoRotate = not S.state.flyEnabled end
+            S.fn.status(S.state.flyEnabled and "FLIGHT ON" or "FLIGHT OFF")
+        end)
+
+        S.fn.connect(noclipBtn.Activated, function()
+            S.fn.enableNoclip(not S.state.noclipEnabled)
+            S.fn.setButtonState(noclipBtn, "NOCLIP", S.state.noclipEnabled)
+            S.fn.status(S.state.noclipEnabled and "NOCLIP ON" or "NOCLIP OFF")
+        end)
+
+        local function bindHold(button, key)
+            S.fn.connect(button.InputBegan, function(input)
+                if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                    S.state[key] = true
+                end
+            end)
+            S.fn.connect(button.InputEnded, function(input)
+                if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                    S.state[key] = false
+                end
+            end)
+        end
+        bindHold(upBtn, "flyUp")
+        bindHold(downBtn, "flyDown")
+
+        S.fn.connect(resetBtn.Activated, function()
+            S.state.walkSpeed = 16
+            S.state.jumpPower = 50
+            S.state.sprintSpeed = 32
+            S.state.flySpeed = 60
+            S.state.sprintEnabled = false
+            S.state.flyEnabled = false
+            S.fn.enableNoclip(false)
+            S.fn.setButtonState(sprintBtn, "SPRINT", false)
+            S.fn.setButtonState(flyBtn, "FLIGHT", false)
+            S.fn.setButtonState(noclipBtn, "NOCLIP", false)
+            local _, hum, root = S.fn.getCharacter()
+            if hum then hum.AutoRotate = true end
+            if root then root.AssemblyLinearVelocity = Vector3.zero end
+            S.fn.applyMovement()
+            S.fn.status("MOVEMENT RESET", "good")
+        end)
+    end
+
+    --// VISUALS
+    do
+        local visuals = S.fn.section(visualsPage, "VISUALS", "Brightness is 0–100. 50 restores the game's normal brightness.")
+
+        S.fn.makeSlider(visuals, "BRIGHTNESS", 0, 100, S.state.brightness, function(v)
+            S.state.brightness = v
+            S.fn.applyBrightness()
+            S.fn.status("BRIGHTNESS " .. tostring(v))
+        end)
+
+        S.fn.makeSlider(visuals, "FIELD OF VIEW", 40, 120, S.state.fov, function(v)
+            S.state.fov = v
+            if S.camera then S.camera.FieldOfView = v end
+        end)
+
+        local fullBtn = S.fn.button(visuals, "FULLBRIGHT")
+        local nightBtn = S.fn.button(visuals, "NIGHT VISION")
+        local resetBtn = S.fn.button(visuals, "RESET VISUALS")
+
+        S.fn.connect(fullBtn.Activated, function()
+            S.services.Lighting.Brightness = 4
+            S.services.Lighting.ExposureCompensation = 1
+            S.services.Lighting.ClockTime = 14
+            S.services.Lighting.Ambient = Color3.fromRGB(190, 190, 190)
+            S.services.Lighting.OutdoorAmbient = Color3.fromRGB(190, 190, 190)
+            S.fn.status("FULLBRIGHT APPLIED", "good")
+        end)
+
+        S.fn.connect(nightBtn.Activated, function()
+            S.services.Lighting.Brightness = 2.3
+            S.services.Lighting.ExposureCompensation = 0.6
+            S.services.Lighting.ClockTime = 0
+            S.services.Lighting.Ambient = Color3.fromRGB(100, 145, 115)
+            S.services.Lighting.OutdoorAmbient = Color3.fromRGB(70, 110, 85)
+            S.fn.status("NIGHT VISION APPLIED", "good")
+        end)
+
+        S.fn.connect(resetBtn.Activated, function()
+            S.state.brightness = 50
+            S.state.fov = math.floor(S.original.fov + 0.5)
+            S.services.Lighting.Brightness = S.original.brightness
+            S.services.Lighting.ExposureCompensation = S.original.exposure
+            S.services.Lighting.ClockTime = S.original.clockTime
+            S.services.Lighting.Ambient = S.original.ambient
+            S.services.Lighting.OutdoorAmbient = S.original.outdoorAmbient
+            if S.camera then S.camera.FieldOfView = S.original.fov end
+            S.fn.status("VISUALS RESET", "good")
+        end)
+    end
+
+    --// TRACKERS
+    do
+        local trackers = S.fn.section(trackersPage, "LOCATORS", "Clean floating labels only — no black transparent boxes.")
+        local playerBtn = S.fn.button(trackers, "PLAYER LOCATOR [OFF]")
+        local monsterBtn = S.fn.button(trackers, "MONSTER LOCATOR [OFF]")
+
+        S.fn.makeSlider(trackers, "TRACKER RANGE", 100, 5000, S.state.trackerRange, function(v)
+            S.state.trackerRange = v
+            S.fn.refreshPlayerMarkers()
+            S.fn.refreshMonsterMarkers()
+        end)
+
+        local refreshBtn = S.fn.button(trackers, "REFRESH LOCATORS")
+        local clearBtn = S.fn.button(trackers, "CLEAR LOCATORS")
+
+        S.fn.connect(playerBtn.Activated, function()
+            S.state.playerLocator = not S.state.playerLocator
+            S.fn.setButtonState(playerBtn, "PLAYER LOCATOR", S.state.playerLocator)
+            S.fn.refreshPlayerMarkers()
+            S.fn.status(S.state.playerLocator and "PLAYER LOCATOR ON" or "PLAYER LOCATOR OFF")
+        end)
+
+        S.fn.connect(monsterBtn.Activated, function()
+            S.state.monsterLocator = not S.state.monsterLocator
+            S.fn.setButtonState(monsterBtn, "MONSTER LOCATOR", S.state.monsterLocator)
+            S.fn.refreshMonsterMarkers()
+            S.fn.status(S.state.monsterLocator and "MONSTER LOCATOR ON" or "MONSTER LOCATOR OFF")
+        end)
+
+        S.fn.connect(refreshBtn.Activated, function()
+            S.fn.refreshPlayerMarkers()
+            S.fn.refreshMonsterMarkers()
+            S.fn.status("LOCATORS REFRESHED", "good")
+        end)
+
+        S.fn.connect(clearBtn.Activated, function()
+            S.state.playerLocator = false
+            S.state.monsterLocator = false
+            S.fn.setButtonState(playerBtn, "PLAYER LOCATOR", false)
+            S.fn.setButtonState(monsterBtn, "MONSTER LOCATOR", false)
+            S.fn.clearPlayerMarkers()
+            S.fn.clearMonsterMarkers()
+            S.fn.status("LOCATORS CLEARED", "good")
+        end)
+    end
+
+    --// SETTINGS
+    do
+        local appearance = S.fn.section(settingsPage, "APPEARANCE", "UI theme, blur, scale, and animation controls.")
+        local themeBtn = S.fn.button(appearance, "THEME: " .. S.theme.list[S.state.currentTheme].name)
+        local blurBtn = S.fn.button(appearance, "BACKGROUND BLUR [OFF]")
+        local animationBtn = S.fn.button(appearance, "ANIMATIONS [ON]")
+
+        S.fn.makeSlider(appearance, "UI SCALE", 70, 120, S.state.uiScale, function(v)
+            S.state.uiScale = v
+            S.ui.panelScale.Scale = v / 100
+        end)
+
+        S.fn.connect(themeBtn.Activated, function()
+            S.state.currentTheme = (S.state.currentTheme % #S.theme.list) + 1
+            themeBtn.Text = "THEME: " .. S.theme.list[S.state.currentTheme].name
+            S.fn.updateTheme()
+            S.fn.status("THEME " .. S.theme.list[S.state.currentTheme].name, "good")
+        end)
+
+        S.fn.connect(blurBtn.Activated, function()
+            S.state.blurEnabled = not S.state.blurEnabled
+            S.fn.setButtonState(blurBtn, "BACKGROUND BLUR", S.state.blurEnabled)
+            S.fn.tween(S.ui.blur, 0.2, {Size = S.state.blurEnabled and 14 or 0})
+        end)
+
+        S.fn.connect(animationBtn.Activated, function()
+            S.state.animations = not S.state.animations
+            S.fn.setButtonState(animationBtn, "ANIMATIONS", S.state.animations)
+        end)
+
+        local controls = S.fn.section(settingsPage, "MENU CONTROLS", "Touch drag and touch resize are built in.")
+        local dragBtn = S.fn.button(controls, "LOCK DRAGGING [OFF]")
+        local resizeBtn = S.fn.button(controls, "LOCK RESIZING [OFF]")
+        local fitBtn = S.fn.button(controls, "FIT TO SCREEN")
+        local centerBtn = S.fn.button(controls, "CENTER MENU")
+
+        S.fn.connect(dragBtn.Activated, function()
+            S.state.dragLocked = not S.state.dragLocked
+            S.fn.setButtonState(dragBtn, "LOCK DRAGGING", S.state.dragLocked)
+        end)
+
+        S.fn.connect(resizeBtn.Activated, function()
+            S.state.resizeLocked = not S.state.resizeLocked
+            S.fn.setButtonState(resizeBtn, "LOCK RESIZING", S.state.resizeLocked)
+        end)
+
+        S.fn.connect(fitBtn.Activated, function()
+            S.fn.fitPanel()
+            S.fn.status("FIT TO SCREEN", "good")
+        end)
+
+        S.fn.connect(centerBtn.Activated, function()
+            local sz = S.ui.panel.AbsoluteSize
+            S.ui.panel.Position = UDim2.new(0.5, -math.floor(sz.X / 2), 0.5, -math.floor(sz.Y / 2))
+            S.fn.status("MENU CENTERED", "good")
+        end)
+
+        local danger = S.fn.section(settingsPage, "RESET / EXIT", "These controls restore local changes.")
+        local resetBtn = S.fn.button(danger, "RESET EVERYTHING")
+        local destroyBtn = S.fn.button(danger, "DESTROY MENU")
+        destroyBtn.BackgroundColor3 = Color3.fromRGB(75, 31, 44)
+
+        S.fn.connect(resetBtn.Activated, function()
+            S.state.sprintEnabled = false
+            S.state.flyEnabled = false
+            S.state.playerLocator = false
+            S.state.monsterLocator = false
+            S.state.brightness = 50
+            S.state.fov = math.floor(S.original.fov + 0.5)
+            S.fn.enableNoclip(false)
+            S.fn.clearPlayerMarkers()
+            S.fn.clearMonsterMarkers()
+            S.services.Lighting.Brightness = S.original.brightness
+            S.services.Lighting.ExposureCompensation = S.original.exposure
+            S.services.Lighting.ClockTime = S.original.clockTime
+            S.services.Lighting.Ambient = S.original.ambient
+            S.services.Lighting.OutdoorAmbient = S.original.outdoorAmbient
+            if S.camera then S.camera.FieldOfView = S.original.fov end
+            S.fn.applyMovement()
+            S.fn.status("EVERYTHING RESET", "good")
+        end)
+
+        S.fn.connect(destroyBtn.Activated, function()
+            S.fn.destroy()
+        end)
+    end
+
+    --// RESIZE GRIP
+    S.ui.resizeGrip = Instance.new("Frame")
+    S.ui.resizeGrip.Size = UDim2.fromOffset(24, 24)
+    S.ui.resizeGrip.AnchorPoint = Vector2.new(1, 1)
+    S.ui.resizeGrip.Position = UDim2.new(1, -5, 1, -5)
+    S.ui.resizeGrip.BackgroundColor3 = S.fn.accent()
+    S.ui.resizeGrip.BackgroundTransparency = 0.25
+    S.ui.resizeGrip.BorderSizePixel = 0
+    S.ui.resizeGrip.Active = true
+    S.ui.resizeGrip.Parent = S.ui.panel
+    S.fn.corner(S.ui.resizeGrip, 7)
+
+    --// OPEN BUTTON
+    S.ui.openButton = Instance.new("TextButton")
+    S.ui.openButton.Name = "OpenButton"
+    S.ui.openButton.Size = UDim2.fromOffset(54, 54)
+    S.ui.openButton.Position = UDim2.new(1, -70, 1, -78)
+    S.ui.openButton.BackgroundColor3 = S.theme.surface2
+    S.ui.openButton.BorderSizePixel = 0
+    S.ui.openButton.Text = "🐉"
+    S.ui.openButton.TextSize = 27
+    S.ui.openButton.Font = Enum.Font.GothamBold
+    S.ui.openButton.TextColor3 = S.theme.text
+    S.ui.openButton.Visible = false
+    S.ui.openButton.Active = true
+    S.ui.openButton.Parent = S.ui.gui
+    S.fn.corner(S.ui.openButton, 999)
+    S.fn.stroke(S.ui.openButton, 0.08, 2)
+
+    local openAspect = Instance.new("UIAspectRatioConstraint")
+    openAspect.AspectRatio = 1
+    openAspect.Parent = S.ui.openButton
+
+    --// TOUCH + MOUSE PANEL DRAG
+    do
+        local dragging = false
+        local dragInput
+        local startPos
+        local startPanelPos
+
+        S.fn.connect(S.ui.header.InputBegan, function(input)
+            if S.state.dragLocked then return end
+            if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                dragging = true
+                dragInput = input
+                startPos = input.Position
+                startPanelPos = S.ui.panel.Position
+            end
+        end)
+
+        S.fn.connect(S.services.UIS.InputChanged, function(input)
+            if not dragging or S.state.dragLocked then return end
+            if input == dragInput or input.UserInputType == Enum.UserInputType.MouseMovement then
+                local delta = input.Position - startPos
+                S.ui.panel.Position = UDim2.new(
+                    startPanelPos.X.Scale,
+                    startPanelPos.X.Offset + delta.X,
+                    startPanelPos.Y.Scale,
+                    startPanelPos.Y.Offset + delta.Y
+                )
+            end
+        end)
+
+        S.fn.connect(S.services.UIS.InputEnded, function(input)
+            if input == dragInput or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                dragging = false
+                dragInput = nil
+            end
+        end)
+    end
+
+    --// TOUCH + MOUSE RESIZE
+    do
+        local resizing = false
+        local resizeInput
+        local startPos
+        local startSize
+
+        S.fn.connect(S.ui.resizeGrip.InputBegan, function(input)
+            if S.state.resizeLocked then return end
+            if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                resizing = true
+                resizeInput = input
+                startPos = input.Position
+                startSize = S.ui.panel.AbsoluteSize
+            end
+        end)
+
+        S.fn.connect(S.services.UIS.InputChanged, function(input)
+            if not resizing or S.state.resizeLocked then return end
+            if input == resizeInput or input.UserInputType == Enum.UserInputType.MouseMovement then
+                local delta = input.Position - startPos
+                local vp = S.camera and S.camera.ViewportSize or Vector2.new(1000, 700)
+                local w = math.clamp(startSize.X + delta.X, 360, math.max(360, vp.X - 24))
+                local h = math.clamp(startSize.Y + delta.Y, 300, math.max(300, vp.Y - 24))
+                S.ui.panel.Size = UDim2.fromOffset(w, h)
+            end
+        end)
+
+        S.fn.connect(S.services.UIS.InputEnded, function(input)
+            if input == resizeInput or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                resizing = false
+                resizeInput = nil
+            end
+        end)
+    end
+
+    --// DRAGGABLE OPEN BUTTON
+    do
+        local dragging = false
+        local moved = false
+        local dragInput
+        local startPos
+        local startButtonPos
+
+        S.fn.connect(S.ui.openButton.InputBegan, function(input)
+            if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                dragging = true
+                moved = false
+                dragInput = input
+                startPos = input.Position
+                startButtonPos = S.ui.openButton.Position
+            end
+        end)
+
+        S.fn.connect(S.services.UIS.InputChanged, function(input)
+            if not dragging then return end
+            if input == dragInput or input.UserInputType == Enum.UserInputType.MouseMovement then
+                local delta = input.Position - startPos
+                if delta.Magnitude > 5 then moved = true end
+                S.ui.openButton.Position = UDim2.new(
+                    startButtonPos.X.Scale,
+                    startButtonPos.X.Offset + delta.X,
+                    startButtonPos.Y.Scale,
+                    startButtonPos.Y.Offset + delta.Y
+                )
+            end
+        end)
+
+        S.fn.connect(S.services.UIS.InputEnded, function(input)
+            if input == dragInput or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                dragging = false
+                dragInput = nil
+            end
+        end)
+
+        S.fn.connect(S.ui.openButton.Activated, function()
+            if not moved then S.fn.setMenuOpen(true) end
+        end)
+    end
+
+    --// HEADER BUTTONS
+    S.fn.connect(S.ui.minimize.Activated, function()
+        S.fn.setMenuOpen(false)
+    end)
+    S.fn.connect(S.ui.close.Activated, function()
+        S.fn.setMenuOpen(false)
+    end)
+
+    --// CHARACTER RESET HANDLING
+    S.fn.connect(S.player.CharacterAdded, function()
+        task.wait(0.5)
+        S.original.collisions = {}
+        S.fn.applyMovement()
+    end)
+
+    --// CORE MOVEMENT LOOP
+    S.fn.connect(S.services.RunService.Heartbeat, function()
+        if S.state.destroyed then return end
+        local ch, hum, root = S.fn.getCharacter()
+        if not ch or not hum or not root then return end
+
+        if S.state.noclipEnabled then
+            for _, part in ipairs(ch:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    if S.original.collisions[part] == nil then
+                        S.original.collisions[part] = part.CanCollide
+                    end
+                    part.CanCollide = false
+                end
+            end
+        end
+
+        if S.state.flyEnabled then
+            hum.AutoRotate = false
+            local move = hum.MoveDirection
+            local vertical = 0
+            if S.state.flyUp then vertical += 1 end
+            if S.state.flyDown then vertical -= 1 end
+            local velocity = (move * S.state.flySpeed) + Vector3.new(0, vertical * S.state.flySpeed, 0)
+            root.AssemblyLinearVelocity = velocity
+            if move.Magnitude > 0.05 then
+                local look = Vector3.new(move.X, 0, move.Z)
+                if look.Magnitude > 0.05 then
+                    root.CFrame = CFrame.lookAt(root.Position, root.Position + look)
+                end
+            end
+        else
+            hum.AutoRotate = true
+        end
+    end)
+
+    --// TRACKER LOOP
+    task.spawn(function()
+        while not S.state.destroyed do
+            task.wait(0.65)
+            if S.state.playerLocator then S.fn.refreshPlayerMarkers() end
+            if S.state.monsterLocator then S.fn.refreshMonsterMarkers() end
+        end
+    end)
+
+    --// WELCOME SPLASH
+    do
+        local overlay = Instance.new("Frame")
+        overlay.Name = "WelcomeOverlay"
+        overlay.Size = UDim2.fromScale(1, 1)
+        overlay.BackgroundColor3 = Color3.fromRGB(4, 5, 8)
+        overlay.BackgroundTransparency = 0.14
+        overlay.ZIndex = 500
+        overlay.Parent = S.ui.gui
+
+        local card = Instance.new("Frame")
+        card.AnchorPoint = Vector2.new(0.5, 0.5)
+        card.Position = UDim2.fromScale(0.5, 0.5)
+        card.Size = UDim2.fromOffset(330, 235)
+        card.BackgroundColor3 = S.theme.panel
+        card.BorderSizePixel = 0
+        card.ZIndex = 501
+        card.Parent = overlay
+        S.fn.corner(card, 20)
+        S.fn.stroke(card, 0.06, 1.5)
+
+        local logo = Instance.new("ImageLabel")
+        logo.AnchorPoint = Vector2.new(0.5, 0)
+        logo.Position = UDim2.new(0.5, 0, 0, 18)
+        logo.Size = UDim2.fromOffset(70, 70)
+        logo.BackgroundColor3 = S.theme.surface2
+        logo.BorderSizePixel = 0
+        logo.Image = "rbxassetid://86403667112549"
+        logo.ScaleType = Enum.ScaleType.Crop
+        logo.ZIndex = 502
+        logo.Parent = card
+        S.fn.corner(logo, 999)
+        S.fn.stroke(logo, 0.05, 2)
+
+        local title = Instance.new("TextLabel")
+        title.Position = UDim2.new(0, 15, 0, 100)
+        title.Size = UDim2.new(1, -30, 0, 28)
+        title.BackgroundTransparency = 1
+        title.Text = "NOT RUBY V1"
+        title.TextColor3 = S.theme.text
+        title.TextSize = 20
+        title.Font = Enum.Font.GothamBlack
+        title.ZIndex = 502
+        title.Parent = card
+
+        local sub = Instance.new("TextLabel")
+        sub.Position = UDim2.new(0, 20, 0, 132)
+        sub.Size = UDim2.new(1, -40, 0, 34)
+        sub.BackgroundTransparency = 1
+        sub.Text = "Fresh rebuild • Touch ready • Clean architecture"
+        sub.TextColor3 = S.theme.muted
+        sub.TextSize = 10
+        sub.Font = Enum.Font.GothamBold
+        sub.TextWrapped = true
+        sub.ZIndex = 502
+        sub.Parent = card
+
+        local enter = Instance.new("TextButton")
+        enter.Position = UDim2.new(0, 20, 1, -54)
+        enter.Size = UDim2.new(1, -40, 0, 38)
+        enter.BackgroundColor3 = S.fn.accent()
+        enter.BorderSizePixel = 0
+        enter.Text = "OPEN PANEL"
+        enter.TextColor3 = Color3.fromRGB(8, 10, 15)
+        enter.TextSize = 11
+        enter.Font = Enum.Font.GothamBlack
+        enter.ZIndex = 502
+        enter.Parent = card
+        S.fn.corner(enter, 11)
+
+        local welcomeScale = Instance.new("UIScale")
+        welcomeScale.Scale = 0.86
+        welcomeScale.Parent = card
+        S.fn.tween(welcomeScale, 0.28, {Scale = 1}, Enum.EasingStyle.Back)
+
+        S.fn.connect(enter.Activated, function()
+            S.fn.tween(welcomeScale, 0.14, {Scale = 0.9}, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+            S.fn.tween(overlay, 0.16, {BackgroundTransparency = 1})
+            task.delay(0.17, function()
+                if overlay and overlay.Parent then overlay:Destroy() end
+            end)
+        end)
+    end
+
+    --// STARTUP
+    S.fn.fitPanel()
+    S.fn.selectTab("HOME")
+    S.fn.applyMovement()
+    S.fn.applyBrightness()
+    S.fn.status("READY", "good")
+end)()
