@@ -12406,7 +12406,7 @@ end
 -- local SHOOTER_ALLOWED_PLACE_ID = tonumber("1234567890")
 --============================================================
 
-local SHOOTER_ALLOWED_PLACE_ID = tonumber("placeid")
+local SHOOTER_ALLOWED_PLACE_ID = tonumber("Game.PlaceId")
 
 local function shooterSecurityAllowed()
 	return SHOOTER_ALLOWED_PLACE_ID ~= nil
