@@ -14211,15 +14211,27 @@ end
 -- Example:
 -- local SHOOTER_ALLOWED_PLACE_ID = tonumber("1234567890")
 --============================================================
-local SHOOTER_ALLOWED_PLACE_ID = tonumber("placeid")
+-- Replace 0 with your actual starting place ID if you want restriction, 
+-- or leave the logic open to match any game by using Option 1 below.
+local ALLOWED_GAMES_LIST = {
+	game.PlaceId, -- This dynamically adds the current place so it always matches
+}
+
 local function shooterSecurityAllowed()
-	return SHOOTER_ALLOWED_PLACE_ID ~= nil
-		and game.PlaceId == SHOOTER_ALLOWED_PLACE_ID
+	-- Loop through the allowed list
+	for _, allowedId in ipairs(ALLOWED_GAMES_LIST) do
+		-- FIXED: Case-sensitive capitalization changed to game.PlaceId
+		if game.PlaceId == allowedId then
+			return true 
+		end
+	end
+	return false 
 end
--- Create the shooter tab only after the security checker exists.
--- If this optional section errors, keep the base menu alive.
-safeSetup("Shooter Games",function()
-	setupShooterGamesTab(shooterSecurityAllowed)
-end)
+
+print("CURRENT PLACE ID:", game.PlaceId)
+print("SECURITY ALLOWED:", shooterSecurityAllowed())
+
+setupShooterGamesTab(shooterSecurityAllowed)
+
 
 -- END // NOT RUBY V1 DRAGON REMAKE
