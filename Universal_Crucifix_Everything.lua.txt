@@ -1,0 +1,486 @@
+--[[
+    UNIVERSAL CRUCIFIX SYSTEM
+    Put this Script in ServerScriptService.
+
+    Works on:
+      - NPCs
+      - Models
+      - Parts
+      - MeshParts
+      - UnionOperations
+      - Props
+      - Doors
+      - Furniture
+      - Most other physical Workspace objects
+
+    It will NOT target:
+      - Your own character
+      - Other player characters
+      - Terrain
+      - The Crucifix tool itself
+      - Non-physical objects with no BasePart
+
+    IMPORTANT:
+    DESTROY_TARGET = true means crucifying a map object will remove it.
+    Set it to false if you only want objects temporarily affected.
+]]
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local Debris = game:GetService("Debris")
+
+-- =========================
+-- CONFIG
+-- =========================
+
+local RANGE = 100
+local COOLDOWN = 0.8
+local ONE_USE = false
+
+local DESTROY_TARGET = true
+local LIFT_HEIGHT = 5
+local HOLD_TIME = 0.7
+local FADE_TIME = 0.45
+
+-- Raycast directly where the player is facing first.
+-- If nothing is hit, a cone-search fallback is used.
+local FRONT_DOT = 0.35
+
+-- =========================
+-- TARGET HELPERS
+-- =========================
+
+local function isPlayerCharacter(instance)
+	if not instance then
+		return false
+	end
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		local character = player.Character
+		if character and (instance == character or instance:IsDescendantOf(character)) then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function getPhysicalParts(target)
+	local parts = {}
+
+	if target:IsA("BasePart") then
+		table.insert(parts, target)
+	elseif target:IsA("Model") then
+		for _, obj in ipairs(target:GetDescendants()) do
+			if obj:IsA("BasePart") then
+				table.insert(parts, obj)
+			end
+		end
+	end
+
+	return parts
+end
+
+local function getTargetRoot(target)
+	if not target then
+		return nil
+	end
+
+	if target:IsA("BasePart") then
+		return target
+	end
+
+	if target:IsA("Model") then
+		return target.PrimaryPart
+			or target:FindFirstChild("HumanoidRootPart")
+			or target:FindFirstChild("Root")
+			or target:FindFirstChildWhichIsA("BasePart", true)
+	end
+
+	return nil
+end
+
+local function normalizeTarget(hit)
+	if not hit or not hit:IsA("BasePart") then
+		return nil
+	end
+
+	if isPlayerCharacter(hit) then
+		return nil
+	end
+
+	-- Prefer the closest meaningful Model containing the part.
+	local current = hit.Parent
+	while current and current ~= workspace do
+		if current:IsA("Model") then
+			if not isPlayerCharacter(current) then
+				return current
+			end
+			return nil
+		end
+		current = current.Parent
+	end
+
+	return hit
+end
+
+local function targetIsValid(target, character, tool)
+	if not target or not target.Parent then
+		return false
+	end
+
+	if target == workspace or target == workspace.Terrain then
+		return false
+	end
+
+	if character and (target == character or target:IsDescendantOf(character)) then
+		return false
+	end
+
+	if tool and (target == tool or target:IsDescendantOf(tool)) then
+		return false
+	end
+
+	if isPlayerCharacter(target) then
+		return false
+	end
+
+	if target:GetAttribute("CrucifixImmune") == true then
+		return false
+	end
+
+	if target:GetAttribute("Crucified") == true then
+		return false
+	end
+
+	return getTargetRoot(target) ~= nil
+end
+
+local function raycastTarget(character, tool)
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	local head = character and character:FindFirstChild("Head")
+
+	if not root then
+		return nil
+	end
+
+	local origin = head and head.Position or root.Position
+	local direction = root.CFrame.LookVector * RANGE
+
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.IgnoreWater = true
+
+	local filter = {character}
+	if tool then
+		table.insert(filter, tool)
+	end
+
+	params.FilterDescendantsInstances = filter
+
+	local result = workspace:Raycast(origin, direction, params)
+	if not result then
+		return nil
+	end
+
+	local target = normalizeTarget(result.Instance)
+	if targetIsValid(target, character, tool) then
+		return target
+	end
+
+	return nil
+end
+
+local function fallbackTarget(character, tool)
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not root then
+		return nil
+	end
+
+	local bestTarget = nil
+	local bestDistance = RANGE + 1
+	local seen = {}
+
+	for _, obj in ipairs(workspace:GetDescendants()) do
+		if obj:IsA("BasePart") and not isPlayerCharacter(obj) then
+			local candidate = normalizeTarget(obj) or obj
+
+			if candidate and not seen[candidate] then
+				seen[candidate] = true
+
+				if targetIsValid(candidate, character, tool) then
+					local targetRoot = getTargetRoot(candidate)
+
+					if targetRoot then
+						local offset = targetRoot.Position - root.Position
+						local distance = offset.Magnitude
+
+						if distance > 0.01 and distance <= RANGE then
+							local dot = root.CFrame.LookVector:Dot(offset.Unit)
+
+							if dot >= FRONT_DOT and distance < bestDistance then
+								bestDistance = distance
+								bestTarget = candidate
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+
+	return bestTarget
+end
+
+local function findTarget(character, tool)
+	return raycastTarget(character, tool)
+		or fallbackTarget(character, tool)
+end
+
+-- =========================
+-- EFFECT
+-- =========================
+
+local function createCrossEffect(root)
+	local holder = Instance.new("Part")
+	holder.Name = "UniversalCrucifixEffect"
+	holder.Anchored = true
+	holder.CanCollide = false
+	holder.CanTouch = false
+	holder.CanQuery = false
+	holder.Transparency = 1
+	holder.Size = Vector3.new(0.2, 0.2, 0.2)
+	holder.CFrame = CFrame.new(root.Position + Vector3.new(0, 5, 0))
+	holder.Parent = workspace
+
+	local billboard = Instance.new("BillboardGui")
+	billboard.Name = "Cross"
+	billboard.Adornee = holder
+	billboard.AlwaysOnTop = true
+	billboard.Size = UDim2.fromOffset(130, 130)
+	billboard.Parent = holder
+
+	local text = Instance.new("TextLabel")
+	text.BackgroundTransparency = 1
+	text.Size = UDim2.fromScale(1, 1)
+	text.Text = "✝"
+	text.TextScaled = true
+	text.Font = Enum.Font.GothamBold
+	text.TextStrokeTransparency = 0.15
+	text.Parent = billboard
+
+	return holder
+end
+
+local function crucify(target)
+	if not target or not target.Parent then
+		return
+	end
+
+	local root = getTargetRoot(target)
+	if not root then
+		return
+	end
+
+	target:SetAttribute("Crucified", true)
+
+	local parts = getPhysicalParts(target)
+	if #parts == 0 then
+		target:SetAttribute("Crucified", nil)
+		return
+	end
+
+	local effect = createCrossEffect(root)
+
+	local highlight = Instance.new("Highlight")
+	highlight.Name = "CrucifixHighlight"
+	highlight.FillTransparency = 0.35
+	highlight.OutlineTransparency = 0
+	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	highlight.Adornee = target:IsA("Model") and target or nil
+
+	if target:IsA("Model") then
+		highlight.Parent = target
+	else
+		highlight.Adornee = target
+		highlight.Parent = target
+	end
+
+	-- Save physics state.
+	local saved = {}
+	for _, part in ipairs(parts) do
+		saved[part] = {
+			Anchored = part.Anchored,
+			CanCollide = part.CanCollide,
+		}
+
+		part.AssemblyLinearVelocity = Vector3.zero
+		part.AssemblyAngularVelocity = Vector3.zero
+		part.Anchored = true
+	end
+
+	-- Lift the whole target.
+	if target:IsA("Model") then
+		local startPivot = target:GetPivot()
+		local finishPivot = startPivot + Vector3.new(0, LIFT_HEIGHT, 0)
+
+		local pivotValue = Instance.new("CFrameValue")
+		pivotValue.Value = startPivot
+
+		local connection = pivotValue:GetPropertyChangedSignal("Value"):Connect(function()
+			if target.Parent then
+				target:PivotTo(pivotValue.Value)
+			end
+		end)
+
+		local tween = TweenService:Create(
+			pivotValue,
+			TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			{Value = finishPivot}
+		)
+
+		tween:Play()
+		tween.Completed:Wait()
+
+		connection:Disconnect()
+		pivotValue:Destroy()
+
+	elseif target:IsA("BasePart") then
+		local tween = TweenService:Create(
+			target,
+			TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			{CFrame = target.CFrame + Vector3.new(0, LIFT_HEIGHT, 0)}
+		)
+
+		tween:Play()
+		tween.Completed:Wait()
+	end
+
+	task.wait(HOLD_TIME)
+
+	if DESTROY_TARGET then
+		for _, part in ipairs(parts) do
+			if part and part.Parent then
+				TweenService:Create(
+					part,
+					TweenInfo.new(FADE_TIME),
+					{Transparency = 1}
+				):Play()
+
+				for _, child in ipairs(part:GetChildren()) do
+					if child:IsA("Decal") or child:IsA("Texture") then
+						TweenService:Create(
+							child,
+							TweenInfo.new(FADE_TIME),
+							{Transparency = 1}
+						):Play()
+					end
+				end
+			end
+		end
+
+		task.wait(FADE_TIME)
+
+		if target.Parent then
+			target:Destroy()
+		end
+	else
+		-- Keep target but restore its physics.
+		for part, state in pairs(saved) do
+			if part and part.Parent then
+				part.Anchored = state.Anchored
+				part.CanCollide = state.CanCollide
+			end
+		end
+
+		if target.Parent then
+			target:SetAttribute("Crucified", nil)
+		end
+	end
+
+	if effect and effect.Parent then
+		effect:Destroy()
+	end
+end
+
+-- =========================
+-- TOOL
+-- =========================
+
+local function giveCrucifix(player)
+	local backpack = player:FindFirstChildOfClass("Backpack")
+	if not backpack then
+		return
+	end
+
+	if backpack:FindFirstChild("Crucifix") then
+		return
+	end
+
+	if player.Character and player.Character:FindFirstChild("Crucifix") then
+		return
+	end
+
+	local tool = Instance.new("Tool")
+	tool.Name = "Crucifix"
+	tool.ToolTip = "Face any object and activate"
+	tool.RequiresHandle = false
+	tool.CanBeDropped = false
+	tool.Enabled = true
+	tool.Parent = backpack
+
+	local busy = false
+
+	tool.Activated:Connect(function()
+		if busy or not tool.Enabled then
+			return
+		end
+
+		local character = player.Character
+		if not character or tool.Parent ~= character then
+			return
+		end
+
+		busy = true
+		tool.Enabled = false
+
+		local target = findTarget(character, tool)
+
+		if target then
+			crucify(target)
+
+			if ONE_USE and tool.Parent then
+				tool:Destroy()
+				return
+			end
+		end
+
+		task.wait(COOLDOWN)
+
+		if tool.Parent then
+			tool.Enabled = true
+		end
+
+		busy = false
+	end)
+end
+
+local function setupPlayer(player)
+	player.CharacterAdded:Connect(function()
+		task.wait(0.75)
+		giveCrucifix(player)
+	end)
+
+	if player.Character then
+		task.defer(function()
+			task.wait(0.75)
+			giveCrucifix(player)
+		end)
+	end
+end
+
+for _, player in ipairs(Players:GetPlayers()) do
+	setupPlayer(player)
+end
+
+Players.PlayerAdded:Connect(setupPlayer)
