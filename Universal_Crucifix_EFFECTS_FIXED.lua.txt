@@ -1,0 +1,855 @@
+--[[
+    UNIVERSAL CRUCIFIX SYSTEM
+    Works as a normal Studio Script and as a client loadstring when the executor allows game:GetObjects().
+
+    Works on:
+      - NPCs
+      - Models
+      - Parts
+      - MeshParts
+      - UnionOperations
+      - Props
+      - Doors
+      - Furniture
+      - Most other physical Workspace objects
+
+    It will NOT target:
+      - Your own character
+      - Other player characters
+      - Terrain
+      - The Crucifix tool itself
+      - Non-physical objects with no BasePart
+
+    IMPORTANT:
+    DESTROY_TARGET = true means crucifying a map object will remove it.
+    Set it to false if you only want objects temporarily affected.
+]]
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local Debris = game:GetService("Debris")
+local MarketplaceService = game:GetService("MarketplaceService")
+local InsertService = game:GetService("InsertService")
+local RunService = game:GetService("RunService")
+
+-- =========================
+-- CONFIG
+-- =========================
+
+print("[Universal Crucifix] Starting...")
+
+local CRUCIFIX_ASSET_ID = 12649155037
+local CRUCIFIX_CHAINS_ASSET_ID = 12514154980
+
+-- The script checks what type of Roblox asset this ID is.
+-- If it is an Animation, it plays when the crucifix activates.
+-- If it is a Model, it is loaded and used as the visible crucifix.
+local detectedAssetType = nil
+local detectedAssetName = nil
+
+pcall(function()
+    local info = MarketplaceService:GetProductInfo(CRUCIFIX_ASSET_ID)
+    detectedAssetType = info.AssetTypeId
+    detectedAssetName = info.Name
+    print("[Universal Crucifix] Asset:", CRUCIFIX_ASSET_ID, info.Name, "TypeId:", info.AssetTypeId)
+end)
+
+local RANGE = 100
+local COOLDOWN = 0.8
+local ONE_USE = false
+
+local DESTROY_TARGET = true
+local LIFT_HEIGHT = 5
+local HOLD_TIME = 0.7
+local FADE_TIME = 0.45
+
+-- Raycast directly where the player is facing first.
+-- If nothing is hit, a cone-search fallback is used.
+local FRONT_DOT = 0.35
+
+-- =========================
+-- TARGET HELPERS
+-- =========================
+
+local function isPlayerCharacter(instance)
+	if not instance then
+		return false
+	end
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		local character = player.Character
+		if character and (instance == character or instance:IsDescendantOf(character)) then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function getPhysicalParts(target)
+	local parts = {}
+
+	if target:IsA("BasePart") then
+		table.insert(parts, target)
+	elseif target:IsA("Model") then
+		for _, obj in ipairs(target:GetDescendants()) do
+			if obj:IsA("BasePart") then
+				table.insert(parts, obj)
+			end
+		end
+	end
+
+	return parts
+end
+
+local function getTargetRoot(target)
+	if not target then
+		return nil
+	end
+
+	if target:IsA("BasePart") then
+		return target
+	end
+
+	if target:IsA("Model") then
+		return target.PrimaryPart
+			or target:FindFirstChild("HumanoidRootPart")
+			or target:FindFirstChild("Root")
+			or target:FindFirstChildWhichIsA("BasePart", true)
+	end
+
+	return nil
+end
+
+local function normalizeTarget(hit)
+	if not hit or not hit:IsA("BasePart") then
+		return nil
+	end
+
+	if isPlayerCharacter(hit) then
+		return nil
+	end
+
+	-- Prefer the closest meaningful Model containing the part.
+	local current = hit.Parent
+	while current and current ~= workspace do
+		if current:IsA("Model") then
+			if not isPlayerCharacter(current) then
+				return current
+			end
+			return nil
+		end
+		current = current.Parent
+	end
+
+	return hit
+end
+
+local function targetIsValid(target, character, tool)
+	if not target or not target.Parent then
+		return false
+	end
+
+	if target == workspace or target == workspace.Terrain then
+		return false
+	end
+
+	if character and (target == character or target:IsDescendantOf(character)) then
+		return false
+	end
+
+	if tool and (target == tool or target:IsDescendantOf(tool)) then
+		return false
+	end
+
+	if isPlayerCharacter(target) then
+		return false
+	end
+
+	if target:GetAttribute("CrucifixImmune") == true then
+		return false
+	end
+
+	if target:GetAttribute("Crucified") == true then
+		return false
+	end
+
+	return getTargetRoot(target) ~= nil
+end
+
+local function raycastTarget(character, tool)
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	local head = character and character:FindFirstChild("Head")
+
+	if not root then
+		return nil
+	end
+
+	local origin = head and head.Position or root.Position
+	local direction = root.CFrame.LookVector * RANGE
+
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.IgnoreWater = true
+
+	local filter = {character}
+	if tool then
+		table.insert(filter, tool)
+	end
+
+	params.FilterDescendantsInstances = filter
+
+	local result = workspace:Raycast(origin, direction, params)
+	if not result then
+		return nil
+	end
+
+	local target = normalizeTarget(result.Instance)
+	if targetIsValid(target, character, tool) then
+		return target
+	end
+
+	return nil
+end
+
+local function fallbackTarget(character, tool)
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not root then
+		return nil
+	end
+
+	local bestTarget = nil
+	local bestDistance = RANGE + 1
+	local seen = {}
+
+	for _, obj in ipairs(workspace:GetDescendants()) do
+		if obj:IsA("BasePart") and not isPlayerCharacter(obj) then
+			local candidate = normalizeTarget(obj) or obj
+
+			if candidate and not seen[candidate] then
+				seen[candidate] = true
+
+				if targetIsValid(candidate, character, tool) then
+					local targetRoot = getTargetRoot(candidate)
+
+					if targetRoot then
+						local offset = targetRoot.Position - root.Position
+						local distance = offset.Magnitude
+
+						if distance > 0.01 and distance <= RANGE then
+							local dot = root.CFrame.LookVector:Dot(offset.Unit)
+
+							if dot >= FRONT_DOT and distance < bestDistance then
+								bestDistance = distance
+								bestTarget = candidate
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+
+	return bestTarget
+end
+
+local function findTarget(character, tool)
+	return raycastTarget(character, tool)
+		or fallbackTarget(character, tool)
+end
+
+-- =========================
+-- EFFECT
+-- =========================
+
+local function safeLoadAssetObjects(assetId)
+	-- game:GetObjects works in many client/loadstring environments.
+	local okGet, objects = pcall(function()
+		return game:GetObjects("rbxassetid://" .. tostring(assetId))
+	end)
+
+	if okGet and type(objects) == "table" and #objects > 0 then
+		print("[Universal Crucifix] Loaded asset with game:GetObjects:", assetId, #objects)
+		return objects
+	end
+
+	-- Studio/server fallback.
+	if RunService:IsServer() then
+		local okInsert, container = pcall(function()
+			return InsertService:LoadAsset(assetId)
+		end)
+
+		if okInsert and container then
+			local result = {}
+			for _, child in ipairs(container:GetChildren()) do
+				child.Parent = nil
+				table.insert(result, child)
+			end
+			container:Destroy()
+
+			if #result > 0 then
+				print("[Universal Crucifix] Loaded asset with InsertService:", assetId, #result)
+				return result
+			end
+		end
+	end
+
+	warn("[Universal Crucifix] FAILED to load asset:", assetId)
+	return {}
+end
+
+local function stripScripts(root)
+	if root:IsA("Script") or root:IsA("LocalScript") or root:IsA("ModuleScript") then
+		root:Destroy()
+		return false
+	end
+
+	for _, obj in ipairs(root:GetDescendants()) do
+		if obj:IsA("Script") or obj:IsA("LocalScript") or obj:IsA("ModuleScript") then
+			obj:Destroy()
+		end
+	end
+
+	return true
+end
+
+local function enableVisualEffects(root)
+	local list = {root}
+	for _, obj in ipairs(root:GetDescendants()) do
+		table.insert(list, obj)
+	end
+
+	for _, obj in ipairs(list) do
+		if obj:IsA("ParticleEmitter") then
+			obj.Enabled = true
+			pcall(function()
+				obj:Emit(math.max(15, math.floor(obj.Rate * 0.4)))
+			end)
+		elseif obj:IsA("Trail") or obj:IsA("Beam") then
+			obj.Enabled = true
+		elseif obj:IsA("PointLight")
+			or obj:IsA("SpotLight")
+			or obj:IsA("SurfaceLight") then
+			obj.Enabled = true
+		end
+	end
+end
+
+local function loadCrucifixChains(root)
+	if not root then
+		return nil
+	end
+
+	local loaded = safeLoadAssetObjects(CRUCIFIX_CHAINS_ASSET_ID)
+	if #loaded == 0 then
+		return nil
+	end
+
+	-- One wrapper lets us position Models, loose Parts and Folders together.
+	local wrapper = Instance.new("Model")
+	wrapper.Name = "CrucifixChainsEffect"
+	wrapper.Parent = workspace
+
+	local holder = Instance.new("Part")
+	holder.Name = "EffectOrigin"
+	holder.Size = Vector3.new(0.1, 0.1, 0.1)
+	holder.Transparency = 1
+	holder.Anchored = true
+	holder.CanCollide = false
+	holder.CanTouch = false
+	holder.CanQuery = false
+	holder.CFrame = CFrame.new(root.Position)
+	holder.Parent = wrapper
+
+	local baseParts = {}
+
+	local function prepare(instance)
+		if not stripScripts(instance) then
+			return
+		end
+
+		instance.Parent = wrapper
+
+		local scan = {instance}
+		for _, d in ipairs(instance:GetDescendants()) do
+			table.insert(scan, d)
+		end
+
+		for _, obj in ipairs(scan) do
+			if obj:IsA("BasePart") then
+				obj.Anchored = true
+				obj.CanCollide = false
+				obj.CanTouch = false
+				obj.CanQuery = false
+				obj.Massless = true
+				table.insert(baseParts, obj)
+			end
+		end
+
+		enableVisualEffects(instance)
+	end
+
+	for _, object in ipairs(loaded) do
+		prepare(object)
+	end
+
+	-- If the asset contains normal 3D geometry, move the whole saved layout
+	-- so its pivot sits on the crucified target.
+	if #baseParts > 0 then
+		pcall(function()
+			wrapper:PivotTo(CFrame.new(root.Position))
+		end)
+	else
+		-- Some VFX assets are only Attachments/Particles.
+		-- Reparent compatible effect objects onto our invisible holder.
+		for _, child in ipairs(wrapper:GetChildren()) do
+			if child ~= holder then
+				if child:IsA("Attachment")
+					or child:IsA("ParticleEmitter")
+					or child:IsA("Beam")
+					or child:IsA("Trail")
+					or child:IsA("PointLight")
+					or child:IsA("SpotLight")
+					or child:IsA("SurfaceLight") then
+					child.Parent = holder
+				end
+			end
+		end
+		enableVisualEffects(holder)
+	end
+
+	local alive = true
+
+	task.spawn(function()
+		while alive and wrapper.Parent and root.Parent do
+			local cf = CFrame.new(root.Position)
+
+			if #baseParts > 0 then
+				pcall(function()
+					wrapper:PivotTo(cf)
+				end)
+			else
+				holder.CFrame = cf
+			end
+
+			task.wait()
+		end
+	end)
+
+	-- Give one extra burst after parenting/positioning.
+	task.defer(function()
+		if wrapper.Parent then
+			enableVisualEffects(wrapper)
+		end
+	end)
+
+	return {
+		instance = wrapper,
+		destroy = function()
+			alive = false
+			if wrapper and wrapper.Parent then
+				wrapper:Destroy()
+			end
+		end
+	}
+end
+
+local function createCrossEffect(root)
+	local holder = Instance.new("Part")
+	holder.Name = "UniversalCrucifixEffect"
+	holder.Anchored = true
+	holder.CanCollide = false
+	holder.CanTouch = false
+	holder.CanQuery = false
+	holder.Transparency = 1
+	holder.Size = Vector3.new(0.2, 0.2, 0.2)
+	holder.CFrame = CFrame.new(root.Position + Vector3.new(0, 5, 0))
+	holder.Parent = workspace
+
+	local billboard = Instance.new("BillboardGui")
+	billboard.Name = "Cross"
+	billboard.Adornee = holder
+	billboard.AlwaysOnTop = true
+	billboard.Size = UDim2.fromOffset(130, 130)
+	billboard.Parent = holder
+
+	local text = Instance.new("TextLabel")
+	text.BackgroundTransparency = 1
+	text.Size = UDim2.fromScale(1, 1)
+	text.Text = "✝"
+	text.TextScaled = true
+	text.Font = Enum.Font.GothamBold
+	text.TextStrokeTransparency = 0.15
+	text.Parent = billboard
+
+	return holder
+end
+
+local function crucify(target)
+	if not target or not target.Parent then
+		return
+	end
+
+	local root = getTargetRoot(target)
+	if not root then
+		return
+	end
+
+	target:SetAttribute("Crucified", true)
+
+	local parts = getPhysicalParts(target)
+	if #parts == 0 then
+		target:SetAttribute("Crucified", nil)
+		return
+	end
+
+	local chainsEffect = loadCrucifixChains(root)
+	local effect = chainsEffect and chainsEffect.instance or createCrossEffect(root)
+
+	local highlight = Instance.new("Highlight")
+	highlight.Name = "CrucifixHighlight"
+	highlight.FillTransparency = 0.35
+	highlight.OutlineTransparency = 0
+	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	highlight.Adornee = target:IsA("Model") and target or nil
+
+	if target:IsA("Model") then
+		highlight.Parent = target
+	else
+		highlight.Adornee = target
+		highlight.Parent = target
+	end
+
+	-- Save physics state.
+	local saved = {}
+	for _, part in ipairs(parts) do
+		saved[part] = {
+			Anchored = part.Anchored,
+			CanCollide = part.CanCollide,
+		}
+
+		part.AssemblyLinearVelocity = Vector3.zero
+		part.AssemblyAngularVelocity = Vector3.zero
+		part.Anchored = true
+	end
+
+	-- Lift the whole target.
+	if target:IsA("Model") then
+		local startPivot = target:GetPivot()
+		local finishPivot = startPivot + Vector3.new(0, LIFT_HEIGHT, 0)
+
+		local pivotValue = Instance.new("CFrameValue")
+		pivotValue.Value = startPivot
+
+		local connection = pivotValue:GetPropertyChangedSignal("Value"):Connect(function()
+			if target.Parent then
+				target:PivotTo(pivotValue.Value)
+			end
+		end)
+
+		local tween = TweenService:Create(
+			pivotValue,
+			TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			{Value = finishPivot}
+		)
+
+		tween:Play()
+		tween.Completed:Wait()
+
+		connection:Disconnect()
+		pivotValue:Destroy()
+
+	elseif target:IsA("BasePart") then
+		local tween = TweenService:Create(
+			target,
+			TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			{CFrame = target.CFrame + Vector3.new(0, LIFT_HEIGHT, 0)}
+		)
+
+		tween:Play()
+		tween.Completed:Wait()
+	end
+
+	task.wait(HOLD_TIME)
+
+	if DESTROY_TARGET then
+		for _, part in ipairs(parts) do
+			if part and part.Parent then
+				TweenService:Create(
+					part,
+					TweenInfo.new(FADE_TIME),
+					{Transparency = 1}
+				):Play()
+
+				for _, child in ipairs(part:GetChildren()) do
+					if child:IsA("Decal") or child:IsA("Texture") then
+						TweenService:Create(
+							child,
+							TweenInfo.new(FADE_TIME),
+							{Transparency = 1}
+						):Play()
+					end
+				end
+			end
+		end
+
+		task.wait(FADE_TIME)
+
+		if target.Parent then
+			target:Destroy()
+		end
+	else
+		-- Keep target but restore its physics.
+		for part, state in pairs(saved) do
+			if part and part.Parent then
+				part.Anchored = state.Anchored
+				part.CanCollide = state.CanCollide
+			end
+		end
+
+		if target.Parent then
+			target:SetAttribute("Crucified", nil)
+		end
+	end
+
+	if chainsEffect then
+		chainsEffect.destroy()
+	elseif effect and effect.Parent then
+		effect:Destroy()
+	end
+end
+
+
+-- =========================
+-- CRUCIFIX ASSET / ANIMATION
+-- =========================
+
+local function findAnimationId(objects)
+	for _, root in ipairs(objects) do
+		if root:IsA("Animation") and root.AnimationId ~= "" then
+			return root.AnimationId
+		end
+
+		for _, obj in ipairs(root:GetDescendants()) do
+			if obj:IsA("Animation") and obj.AnimationId ~= "" then
+				return obj.AnimationId
+			end
+		end
+	end
+
+	-- If Roblox reports that the ID itself is an Animation, use it directly.
+	if detectedAssetType == 24 then
+		return "rbxassetid://" .. tostring(CRUCIFIX_ASSET_ID)
+	end
+
+	return nil
+end
+
+local function playCrucifixAnimation(character, tool)
+	local animationId = tool and tool:GetAttribute("CrucifixAnimationId")
+
+	if not animationId or animationId == "" then
+		return nil
+	end
+
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not humanoid then
+		return nil
+	end
+
+	local animator = humanoid:FindFirstChildOfClass("Animator")
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = humanoid
+	end
+
+	local animation = Instance.new("Animation")
+	animation.Name = "CrucifixActivationAnimation"
+	animation.AnimationId = animationId
+
+	local ok, track = pcall(function()
+		return animator:LoadAnimation(animation)
+	end)
+
+	animation:Destroy()
+
+	if ok and track then
+		track.Priority = Enum.AnimationPriority.Action
+		track:Play(0.08)
+		print("[Universal Crucifix] Playing animation:", animationId)
+		return track
+	end
+
+	warn("[Universal Crucifix] Animation could not be played:", animationId)
+	return nil
+end
+
+local function attachCrucifixModel(tool)
+	local loaded = safeLoadAssetObjects(CRUCIFIX_ASSET_ID)
+
+	if #loaded == 0 then
+		warn("[Universal Crucifix] Crucifix model asset failed to load:", CRUCIFIX_ASSET_ID)
+		return
+	end
+
+	local animationId = findAnimationId(loaded)
+	if animationId then
+		tool:SetAttribute("CrucifixAnimationId", animationId)
+	end
+
+	local allParts = {}
+	local preferredHandle = nil
+
+	for _, root in ipairs(loaded) do
+		if stripScripts(root) then
+			-- If the asset itself is just an Animation, don't parent it into the Tool.
+			if not root:IsA("Animation") then
+				root.Parent = tool
+			end
+
+			local scan = {root}
+			for _, obj in ipairs(root:GetDescendants()) do
+				table.insert(scan, obj)
+			end
+
+			for _, obj in ipairs(scan) do
+				if obj:IsA("BasePart") then
+					obj.Anchored = false
+					obj.CanCollide = false
+					obj.CanTouch = false
+					obj.Massless = true
+					table.insert(allParts, obj)
+
+					if obj.Name == "Handle" then
+						preferredHandle = preferredHandle or obj
+					end
+				end
+			end
+		end
+	end
+
+	local handle = preferredHandle or allParts[1]
+
+	if not handle then
+		-- Asset may only be an Animation.
+		print("[Universal Crucifix] Asset contains no physical crucifix model.")
+		return
+	end
+
+	-- Roblox Tools require Handle to be a direct Tool child.
+	local oldCF = handle.CFrame
+	handle.Name = "Handle"
+	handle.Parent = tool
+	handle.CFrame = oldCF
+	tool.RequiresHandle = true
+
+	-- Weld every other visible piece to Handle while preserving its current pose.
+	for _, part in ipairs(allParts) do
+		if part ~= handle and part.Parent then
+			local alreadyConnected = false
+
+			for _, existing in ipairs(part:GetChildren()) do
+				if existing:IsA("WeldConstraint") then
+					alreadyConnected = true
+					break
+				end
+			end
+
+			if not alreadyConnected then
+				local weld = Instance.new("WeldConstraint")
+				weld.Name = "CrucifixWeld"
+				weld.Part0 = handle
+				weld.Part1 = part
+				weld.Parent = handle
+			end
+		end
+	end
+
+	print("[Universal Crucifix] Attached crucifix model:", CRUCIFIX_ASSET_ID, "parts:", #allParts)
+end
+
+-- =========================
+-- TOOL
+-- =========================
+
+local function giveCrucifix(player)
+	local backpack = player:FindFirstChildOfClass("Backpack")
+	if not backpack then
+		return
+	end
+
+	if backpack:FindFirstChild("Crucifix") then
+		return
+	end
+
+	if player.Character and player.Character:FindFirstChild("Crucifix") then
+		return
+	end
+
+	local tool = Instance.new("Tool")
+	tool.Name = "Crucifix"
+	tool.ToolTip = "Face any object and activate"
+	tool.RequiresHandle = false
+	tool.CanBeDropped = false
+	tool.Enabled = true
+	tool.Parent = backpack
+
+	attachCrucifixModel(tool)
+
+	local busy = false
+
+	tool.Activated:Connect(function()
+		if busy or not tool.Enabled then
+			return
+		end
+
+		local character = player.Character
+		if not character or tool.Parent ~= character then
+			return
+		end
+
+		busy = true
+		tool.Enabled = false
+
+		local animationTrack = playCrucifixAnimation(character, tool)
+
+		local target = findTarget(character, tool)
+
+		if target then
+			crucify(target)
+
+			if ONE_USE and tool.Parent then
+				tool:Destroy()
+				return
+			end
+		end
+
+		task.wait(COOLDOWN)
+
+		if tool.Parent then
+			tool.Enabled = true
+		end
+
+		busy = false
+	end)
+end
+
+local function setupPlayer(player)
+	player.CharacterAdded:Connect(function()
+		task.wait(0.75)
+		giveCrucifix(player)
+	end)
+
+	if player.Character then
+		task.defer(function()
+			task.wait(0.75)
+			giveCrucifix(player)
+		end)
+	end
+end
+
+for _, player in ipairs(Players:GetPlayers()) do
+	setupPlayer(player)
+end
+
+Players.PlayerAdded:Connect(setupPlayer)
