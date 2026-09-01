@@ -1,0 +1,41 @@
+-- TP Walk extracted from the supplied script.
+-- Original behavior preserved: default speed = 1 and movement is applied on Heartbeat.
+-- No menu/key press required; it activates immediately when loaded.
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+local speaker = Players.LocalPlayer
+local speed = 1
+local tpwalkStack = 0
+
+local function startTpWalk(character)
+    local humanoid = character and character:FindFirstChildWhichIsA("Humanoid")
+    if not humanoid then
+        humanoid = character and character:WaitForChild("Humanoid")
+    end
+
+    if not (character and humanoid) then
+        return
+    end
+
+    local tpwalking
+    tpwalking = RunService.Heartbeat:Connect(function(delta)
+        if not (character and humanoid and humanoid.Parent) then
+            if tpwalking then
+                tpwalking:Disconnect()
+            end
+            return
+        end
+
+        if humanoid.MoveDirection.Magnitude > 0 then
+            character:TranslateBy(humanoid.MoveDirection * (speed + tpwalkStack) * delta * 10)
+        end
+    end)
+end
+
+if speaker.Character then
+    startTpWalk(speaker.Character)
+else
+    startTpWalk(speaker.CharacterAdded:Wait())
+end
